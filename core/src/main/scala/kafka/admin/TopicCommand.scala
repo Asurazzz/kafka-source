@@ -43,6 +43,7 @@ object TopicCommand extends Logging {
 
     val opts = new TopicCommandOptions(args)
 
+    // 判断参数长度
     if(args.length == 0)
       CommandLineUtils.printUsageAndDie(opts.parser, "Create, delete, describe, or change a topic.")
 
@@ -51,8 +52,10 @@ object TopicCommand extends Logging {
     if(actions != 1)
       CommandLineUtils.printUsageAndDie(opts.parser, "Command must include exactly one action: --list, --describe, --create, --alter or --delete")
 
+    // 参数验证
     opts.checkArgs()
 
+    // 初始化zookeeper链接
     val zkUtils = ZkUtils(opts.options.valueOf(opts.zkConnectOpt),
                           30000,
                           30000,
@@ -60,14 +63,19 @@ object TopicCommand extends Logging {
     var exitCode = 0
     try {
       if(opts.options.has(opts.createOpt))
+        // 创建topic
         createTopic(zkUtils, opts)
       else if(opts.options.has(opts.alterOpt))
+        // 修改topic
         alterTopic(zkUtils, opts)
       else if(opts.options.has(opts.listOpt))
+        // 列出所有的topic，bin/kafka-topics.sh --list --zookeeper localhost:2181
         listTopics(zkUtils, opts)
       else if(opts.options.has(opts.describeOpt))
+        // 查看topic描述，bin/kafka-topics.sh --describe --zookeeper localhost:2181
         describeTopic(zkUtils, opts)
       else if(opts.options.has(opts.deleteOpt))
+        // 删除topic
         deleteTopic(zkUtils, opts)
     } catch {
       case e: Throwable =>
@@ -92,19 +100,28 @@ object TopicCommand extends Logging {
   }
 
   def createTopic(zkUtils: ZkUtils, opts: TopicCommandOptions) {
+    // 获取topic名称
     val topic = opts.options.valueOf(opts.topicOpt)
     val configs = parseTopicConfigsToBeAdded(opts)
     val ifNotExists = opts.options.has(opts.ifNotExistsOpt)
     if (Topic.hasCollisionChars(topic))
       println("WARNING: Due to limitations in metric names, topics with a period ('.') or underscore ('_') could collide. To avoid issues it is best to use either, but not both.")
     try {
+      // 如果客户端指定了topic的partition的replicas分配情况，则直接把所有topic的元数 据信息持久化写入到zk，
+      // topic的properties写入到/config/topics/{topic}目录，
+      // topic的PartitionAssignment写入到/brokers/topics/{topic}目录
       if (opts.options.has(opts.replicaAssignmentOpt)) {
         val assignment = parseReplicaAssignment(opts.options.valueOf(opts.replicaAssignmentOpt))
         AdminUtils.createOrUpdateTopicPartitionAssignmentPathInZK(zkUtils, topic, assignment, configs, update = false)
       } else {
+        // 否则需要自动生成topic的PartitionAssignment
         CommandLineUtils.checkRequiredArgs(opts.parser, opts.options, opts.partitionsOpt, opts.replicationFactorOpt)
+        // 分区
         val partitions = opts.options.valueOf(opts.partitionsOpt).intValue
+        // 副本集
         val replicas = opts.options.valueOf(opts.replicationFactorOpt).intValue
+        // 从0.10.x版本开始，kafka可以支持指定broker的机架信息，如果指定了机架信息则在 副本分配时会尽可能地让分区的副本分不到不同的机架上。
+        // 指定机架信息是通过kafka的配置文件config/server.properties中的 broker.rack参数来配置的
         val rackAwareMode = if (opts.options.has(opts.disableRackAware)) RackAwareMode.Disabled
                             else RackAwareMode.Enforced
         AdminUtils.createTopic(zkUtils, topic, partitions, replicas, configs, rackAwareMode)
